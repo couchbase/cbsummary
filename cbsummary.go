@@ -48,9 +48,26 @@ type SummaryInfo struct {
 
 var CONFIG_FILE = flag.String("config", "", "Config file listing clusters and credentials to summarize.")
 var OUTPUT_FILE = flag.String("output", "", "Name for output file (default cbsummary.out.<timestamp>).")
+var HELP = flag.Bool("help", false, "Print a help message.")
 
 func main() {
 	flag.Parse()
+
+    // help message
+    if *HELP || len(*CONFIG_FILE) == 0 {
+        fmt.Printf("cbsummary --config=<config file> [--output=<output file>]\n\n")
+        fmt.Printf("  cbsummary connects to a set of Couchbase clusters and generates a summary report.\n\n")
+        fmt.Printf("  The config file contains JSON specifying an array of information on each cluster,\n")
+        fmt.Printf("  giving the Couchbase login/password and one or more IP addresses for cluster nodes.\n")
+        fmt.Printf("  An example config file giving information about 2 clusters is:\n\n")
+        fmt.Printf("  { \"clusters\": [\n")
+        fmt.Printf("    {\"login\": \"Administrator\", \"pass\": \"password1\", \"nodes\": [\"http://192.168.1.1:8091\"]},\n")
+        fmt.Printf("    {\"login\": \"Administrator\", \"pass\": \"password2\", \"nodes\": [\"http://192.166.1.1:8091\",\"http://192.16.1.2:8091\"]}\n")
+        fmt.Printf("  ]}\n\n")
+        fmt.Printf("  The summary report is sent to the file 'cbsummary.out.<timestamp>', unless a different\n")
+        fmt.Printf("  file name is specified with the --output option.\n\n")
+        return
+    }
 
 	// need some configuration
 	if CONFIG_FILE == nil || len(*CONFIG_FILE) == 0 {

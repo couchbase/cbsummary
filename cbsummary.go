@@ -41,8 +41,14 @@ type SummaryInfo struct {
 	NumClusters   int              `json:"#clusters"`
 	TotalNumNodes int              `json:"#nodes"`
 	NodeVersions  map[string]int   `json:"#nodeVersions"`
-	Clusters      []ClusterSummary `json:"clusters"`
+	Clusters      []interface{}    `json:"clusters"`
 }
+
+type ClusterError struct {
+    TheCluster Cluster `json:"error_with_cluster"`
+    ErrMsg string      `json:"error_message"`
+}
+
 
 // flags for the command-line
 
@@ -55,7 +61,7 @@ func main() {
 
     // help message
     if *HELP || len(*CONFIG_FILE) == 0 {
-        fmt.Printf("cbsummary --config=<config file> [--output=<output file>]\n\n")
+        fmt.Printf("usage: cbsummary --config=<config file> [--output=<output file>]\n\n")
         fmt.Printf("  cbsummary connects to a set of Couchbase clusters and generates a summary report.\n\n")
         fmt.Printf("  The config file contains JSON specifying an array of information on each cluster,\n")
         fmt.Printf("  giving the Couchbase login/password and one or more IP addresses for cluster nodes.\n")
@@ -85,10 +91,10 @@ func main() {
 	}
 
 	// load the configuration
-	fmt.Printf("Using config file: %s\n", *CONFIG_FILE)
+
 	config, err := ioutil.ReadFile(*CONFIG_FILE)
 	if err != nil {
-		fmt.Printf("Error reading configuration: %s\n\n", err)
+		fmt.Printf("Error reading configuration file %s: %s\n\n", *CONFIG_FILE, err)
 		return
 	}
 
@@ -96,19 +102,23 @@ func main() {
 	var clusters ClusterList
 	err = json.Unmarshal(config, &clusters)
 	if err != nil {
-		fmt.Printf("Error parsing configuration: %s\n\n", err)
+		fmt.Printf("Error parsing configuration file %s: %s\n\n", *CONFIG_FILE, err)
 		return
 	}
+
+	fmt.Printf("Working from config file: %s\n", *CONFIG_FILE)
 
 	clusterSummary := new(SummaryInfo)
 	clusterSummary.NumClusters = len(clusters.Clusters)
 	clusterSummary.TotalNumNodes = 0
 	clusterSummary.NodeVersions = make(map[string]int)
-	clusterSummary.Clusters = make([]ClusterSummary, len(clusters.Clusters))
+	clusterSummary.Clusters = make([]interface{}, len(clusters.Clusters))
 
 	// loop through the clusters
 	for cnum, cluster := range clusters.Clusters {
 		//fmt.Printf("\n\nCluster login: %s pass %s nodes: %v\n", cluster.Login, cluster.Pass, cluster.Nodes)
+		var thisCluster *ClusterSummary
+		var cerr error
 
 		for _, node := range cluster.Nodes {
 			client := CreateRestClient(node, cluster.Login, cluster.Pass, nil)
@@ -116,6 +126,7 @@ func main() {
 			// get /pools and /pools/defaults
 			pools, err := client.GetPoolsData()
 			if err != nil {
+			    cerr = err
 				fmt.Printf("Error getting bucket settings from node %s: %v\n", node, err)
 				continue // try the next node
 			}
@@ -123,27 +134,28 @@ func main() {
 			poolsDefaults, err := client.GetPoolsDefaultData()
 
 			if err != nil {
+			    cerr = err
 				fmt.Printf("Error getting pools/default from node %s: %v\n", node, err)
 				continue // try the next node
 			}
 
 			// if we make it this far, we have both /pools and /pools/defaults
 
-			clusterSummary.Clusters[cnum].ImplementationVersion = pools.ImplementationVersion
-			clusterSummary.Clusters[cnum].IsEnterprise = pools.IsEnterprise
-			clusterSummary.Clusters[cnum].Uuid = pools.Uuid
+            thisCluster = new(ClusterSummary)
+			thisCluster.ImplementationVersion = pools.ImplementationVersion
+			thisCluster.IsEnterprise = pools.IsEnterprise
+			thisCluster.Uuid = pools.Uuid
 
-			clusterSummary.Clusters[cnum].Balanced = poolsDefaults.Balanced
-			clusterSummary.Clusters[cnum].ClusterName = poolsDefaults.ClusterName
-			clusterSummary.Clusters[cnum].FtsMemoryQuota = poolsDefaults.FtsMemoryQuota
-			clusterSummary.Clusters[cnum].IndexMemoryQuota = poolsDefaults.IndexMemoryQuota
-			clusterSummary.Clusters[cnum].MemoryQuota = poolsDefaults.MemoryQuota
-			clusterSummary.Clusters[cnum].Name = poolsDefaults.Name
-			clusterSummary.Clusters[cnum].NodeCount = len(poolsDefaults.Nodes)
-			clusterSummary.TotalNumNodes = clusterSummary.TotalNumNodes + len(poolsDefaults.Nodes)
-			clusterSummary.Clusters[cnum].Nodes = poolsDefaults.Nodes
-			clusterSummary.Clusters[cnum].RebalanceStatus = poolsDefaults.RebalanceStatus
-			clusterSummary.Clusters[cnum].StorageTotals = poolsDefaults.StorageTotals
+			thisCluster.Balanced = poolsDefaults.Balanced
+			thisCluster.ClusterName = poolsDefaults.ClusterName
+			thisCluster.FtsMemoryQuota = poolsDefaults.FtsMemoryQuota
+			thisCluster.IndexMemoryQuota = poolsDefaults.IndexMemoryQuota
+			thisCluster.MemoryQuota = poolsDefaults.MemoryQuota
+			thisCluster.Name = poolsDefaults.Name
+			thisCluster.NodeCount = len(poolsDefaults.Nodes)
+			thisCluster.Nodes = poolsDefaults.Nodes
+			thisCluster.RebalanceStatus = poolsDefaults.RebalanceStatus
+			thisCluster.StorageTotals = poolsDefaults.StorageTotals
 
 			// for each of the nodes in this cluster, show the distribution of versions
 			nodeVersions := make(map[string]int)
@@ -151,7 +163,10 @@ func main() {
 				nodeVersions[nodeInfo.Version] = nodeVersions[nodeInfo.Version] + 1
 				clusterSummary.NodeVersions[nodeInfo.Version] = clusterSummary.NodeVersions[nodeInfo.Version] + 1
 			}
-			clusterSummary.Clusters[cnum].NodeVersions = nodeVersions
+			thisCluster.NodeVersions = nodeVersions
+
+            clusterSummary.Clusters[cnum] = thisCluster
+			clusterSummary.TotalNumNodes = clusterSummary.TotalNumNodes + len(poolsDefaults.Nodes)
 
 			//  debugging output
 			//body, err := json.Marshal(clusterSummary.Clusters[cnum])
@@ -162,6 +177,17 @@ func main() {
 			// when we've gotten all the info, break from this look to look at the next cluster
 
 			break
+		}
+		
+		// if we get this far with thisCluster unset, we need to replace it with a
+		// different item indicating the error.
+		
+		if (thisCluster == nil) {
+		    //fmt.Printf("Failed to contact cluster, error: %v\n",cerr)
+    		errorStatus := new(ClusterError)
+    		errorStatus.TheCluster = cluster
+    		errorStatus.ErrMsg = cerr.Error()
+    		clusterSummary.Clusters[cnum] = errorStatus
 		}
 	}
 

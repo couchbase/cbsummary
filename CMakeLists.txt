@@ -50,7 +50,7 @@ IF (BUILD_ENTERPRISE)
     GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
     LDFLAGS "${_ldflags}"
     INSTALL_PATH bin OUTPUT cbsummary
-    GOVERSION 1.8.1)
+    GOVERSION 1.8.5)
 
 #  ADD_SUBDIRECTORY(docs)
 

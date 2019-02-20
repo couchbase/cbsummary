@@ -198,6 +198,7 @@ type SysStats struct {
     Mem_total float64 `json:"mem_total"`
     Swap_total float64 `json:"swap_total"`
     Swap_used float64 `json:"swap_used"`
+    CPU_cores_available float64 `json:"cpu_cores_available"`
 }
 
 type ClusterStorageInfo struct {
@@ -267,6 +268,30 @@ func (r *RestClient) executeGet(uri string) (*http.Response, error) {
 }
 
 
+func (r *RestClient) executePost(uri string, params map[string]string) (*http.Response, error) {
+    // build the form parameters from the map
+    data := url.Values{}
+    for key, val := range params {
+        data.Set(key,val)
+    }
+
+	method := "POST"
+	req, err := http.NewRequest(method, uri, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, &RestClientError{method, uri, err}
+	}
+	req.SetBasicAuth(r.username, r.password)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	
+	resp, err := r.executeRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+
 func (r *RestClient) executeRequest(req *http.Request) (*http.Response, error) {
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -319,6 +344,30 @@ func (r *RestClient) executeRequest(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, nil
+}
+
+//
+// get the license summary report
+//
+
+func (r *RestClient) GetLicenseUsage() (report map[string]interface{}, err error) {
+    uri := r.host + "/settings/license/validate"
+    
+        
+    params := make(map[string]string)
+    params["generation_only"] = "true"
+    
+    resp, err := r.executePost(uri, params)
+    if (err != nil) {
+        return nil, err
+    }
+    
+    licenseBytes, err := ioutil.ReadAll(resp.Body)
+    if (err == nil) {
+        json.Unmarshal(licenseBytes, &report)
+    }
+    
+    return
 }
 
 //

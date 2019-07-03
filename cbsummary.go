@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,20 @@ type ClusterSettings struct {
 	EnableAutoFailover bool   `json:"enable_auto_failover"`
 	FailoverTimeout    int    `json:"failover_timeout"`
 	IndexStorageMode   string `json:"index_storage_mode"`
+}
+
+// types for ODP reports
+type BriefCluster struct {
+	Nodes []BriefNode `json:"nodes"`
+	Size  int         `json:"cluster_size"`
+	UUID  string      `json:"cluster_uuid"`
+}
+
+type BriefNode struct {
+	Cores   float64 `json:"cpu_cores_available"`
+	RAM     float64 `json:"mem_total"`
+	Name    string  `json:"hostname"`
+	Version string  `json:"version"`
 }
 
 type ClusterInfo struct {
@@ -55,6 +70,7 @@ var CONFIG_FILE = flag.String("config", "", "Config file listing clusters and cr
 var OUTPUT_FILE = flag.String("output", "", "Name for output file (default cbsummary.out.<timestamp>).")
 var HELP = flag.Bool("help", false, "Print a help message.")
 var FULL = flag.Bool("full", false, "Produce an extensive report, instead of just core and RAM usage.")
+var CSV = flag.Bool("csv", false, "Produce a report in CSV format. Not compatible with full reports.")
 
 func main() {
 	flag.Parse()
@@ -72,9 +88,16 @@ func main() {
 		fmt.Printf("  ]}\n\n")
 		fmt.Printf("  The default report format includes RAM and Core utilization across each specified cluster,\n")
 		fmt.Printf("  since that information is useful in determining compliance with Couchbase licenses. If you\n")
+		fmt.Printf("  specify --csv, then the report is generated in CSV instead of JSON. If, instead, you\n")
 		fmt.Printf("  specify --full, then a much more detailed report is generated.\n\n")
 		fmt.Printf("  The summary report is sent to the file 'cbsummary.out.<timestamp>', unless a different\n")
 		fmt.Printf("  file name is specified with the --output option.\n\n")
+		return
+	}
+
+	// can't have both FULL and CSV
+	if *FULL && *CSV {
+		fmt.Printf("CSV format is not available for full reports.\n\n")
 		return
 	}
 
@@ -121,7 +144,7 @@ func main() {
 	for cnum, cluster := range clusters.Clusters {
 		//fmt.Printf("\n\nCluster login: %s pass %s nodes: %v\n", cluster.Login, cluster.Pass, cluster.Nodes)
 		var thisCluster *ClusterSummary
-		var briefCluster map[string]interface{}
+		var briefCluster *BriefCluster
 		var cerr error
 
 		for _, node := range cluster.Nodes {
@@ -174,31 +197,39 @@ func main() {
 
 				clusterSummary.Clusters[cnum] = thisCluster
 				clusterSummary.TotalNumNodes = clusterSummary.TotalNumNodes + len(poolsDefaults.Nodes)
-				
+
 			} else {
-			    // for a partial report, get the cluster_size, uuid, and an array of nodes with:
-			    // - cpu cores
-			    // - hostname
-			    // - memory limit
-			    
-			    briefCluster = make(map[string]interface{})
-			    
-			    nodes := make([]map[string]interface{}, len(poolsDefaults.Nodes))
-			    curNode := 0
-			    for _, nodeInfo := range poolsDefaults.Nodes {
-			        node := make(map[string]interface{})
-			        node["cpu_cores_available"] = nodeInfo.SystemStats.CPU_cores_available
-			        node["mem_total"] = nodeInfo.MemoryTotal
-			        node["hostname"] = nodeInfo.Hostname
-			        nodes[curNode] = node
-			        curNode = curNode + 1
-			    }
-			    
-			    briefCluster["nodes"] = nodes
-			    briefCluster["cluster_size"] = len(nodes)
-			    briefCluster["cluster_uuid"] = pools.Uuid
-			    
-			    clusterSummary.Clusters[cnum] = briefCluster
+				// for a partial report, get the cluster_size, uuid, and an array of nodes with:
+				// - cpu cores
+				// - hostname
+				// - memory limit
+
+				briefCluster = new(BriefCluster)
+
+				nodes := make([]BriefNode, len(poolsDefaults.Nodes))
+				curNode := 0
+				for _, nodeInfo := range poolsDefaults.Nodes {
+					node := new(BriefNode)
+					node.Cores = nodeInfo.SystemStats.CPU_cores_available
+					node.RAM = nodeInfo.MemoryTotal / 1024.0 / 1024.0 / 1024.0
+					node.Name = nodeInfo.Hostname
+					node.Version = nodeInfo.Version
+					nodes[curNode] = *node
+					curNode = curNode + 1
+				}
+
+				briefCluster.Nodes = nodes
+				briefCluster.Size = len(nodes)
+				briefCluster.UUID = pools.Uuid
+
+				clusterSummary.Clusters[cnum] = briefCluster
+
+				clusterSummary.TotalNumNodes = clusterSummary.TotalNumNodes + len(poolsDefaults.Nodes)
+
+				// for each of the nodes in this cluster, show the distribution of versions
+				for _, nodeInfo := range poolsDefaults.Nodes {
+					clusterSummary.NodeVersions[nodeInfo.Version] = clusterSummary.NodeVersions[nodeInfo.Version] + 1
+				}
 			}
 
 			//  debugging output
@@ -219,15 +250,46 @@ func main() {
 			//fmt.Printf("Failed to contact cluster, error: %v\n",cerr)
 			errorStatus := new(ClusterError)
 			errorStatus.TheCluster = cluster
-			errorStatus.ErrMsg = cerr.Error()
+			if cerr != nil {
+				errorStatus.ErrMsg = cerr.Error()
+			} else {
+				errorStatus.ErrMsg = "Unknown Error"
+			}
 			clusterSummary.Clusters[cnum] = errorStatus
 		}
 	}
 
-	body, err := json.MarshalIndent(clusterSummary, "", "  ")
-	if err != nil {
-		fmt.Printf("Error marshalling summary: %v\n", err)
-		return
+	// create the output, either JSON or CSV
+
+	var body []byte
+
+	if *CSV {
+		var buffer strings.Builder
+		buffer.WriteString("cluster_num\tcluster_uuid\tcluster_size\thostname\tcpu_cores\tRAM\n")
+
+		for cnum, icluster := range clusterSummary.Clusters {
+			cluster, ok := icluster.(*BriefCluster)
+			if ok {
+				for _, node := range cluster.Nodes {
+					// no cores info for earlier than 6.5
+					if node.Version < "6.5" {
+						buffer.WriteString(fmt.Sprintf("%d\t%s\t%d\t%s\tN/A\t%.1f\n", cnum, cluster.UUID, cluster.Size,
+							node.Name, node.RAM))
+					} else {
+						buffer.WriteString(fmt.Sprintf("%d\t%s\t%d\t%s\t%.1f\t%.1f\n", cnum, cluster.UUID, cluster.Size,
+							node.Name, node.Cores, node.RAM))
+					}
+				}
+			}
+		}
+		body = []byte(buffer.String())
+
+	} else { // JSON output
+		body, err = json.MarshalIndent(clusterSummary, "", "  ")
+		if err != nil {
+			fmt.Printf("Error marshalling summary: %v\n", err)
+			return
+		}
 	}
 
 	err = ioutil.WriteFile(output_file, body, 0644)

@@ -17,6 +17,7 @@ PROJECT (cbsummary)
 
 IF (BUILD_ENTERPRISE)
   INCLUDE (FindCouchbaseGo)
+  SET (GOVERSION SUPPORTED_NEWER)
 
   IF (WIN32)
     INCLUDE (PlatformIntrospection)
@@ -50,7 +51,7 @@ IF (BUILD_ENTERPRISE)
     GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
     LDFLAGS "${_ldflags}"
     INSTALL_PATH bin OUTPUT cbsummary
-    GOVERSION 1.19)
+    GOVERSION ${GOVERSION})
 
 #  ADD_SUBDIRECTORY(docs)
 

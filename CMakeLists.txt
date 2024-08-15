@@ -11,9 +11,6 @@ PROJECT (cbsummary)
 # CMAKE_INSTALL_PREFIX - should point to a directory where the bin/ output
 #      directory will be placed
 #
-# GODEPSDIR - should point to a Go workspace directory containing all
-#      transitive Go dependencies
-#
 
 IF (BUILD_ENTERPRISE)
   INCLUDE (FindCouchbaseGo)
@@ -47,8 +44,7 @@ IF (BUILD_ENTERPRISE)
     SET (_ldflags " ${_ldflags} -extldflags '-Wl,-rpath,@executable_path/../lib'")
   ENDIF ()
 
-  GoInstall (TARGET cbsummary PACKAGE github.com/couchbase/cbsummary
-    GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+  GoModBuild (TARGET cbsummary PACKAGE github.com/couchbase/cbsummary
     LDFLAGS "${_ldflags}"
     INSTALL_PATH bin OUTPUT cbsummary
     GOVERSION ${GOVERSION})
